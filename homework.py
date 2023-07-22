@@ -28,15 +28,17 @@ HOMEWORK_VERDICTS = {
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
 }
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    filename='program.log',
-    format='%(asctime)s, %(levelname)s, %(message)s'
-)
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 handler = logging.StreamHandler(stream=sys.stdout)
+formatter = logging.Formatter('%(asctime)s, %(levelname)s, %(message)s')
+handler.setFormatter(formatter)
 logger.addHandler(handler)
+
+
+class HTTPResponseError(Exception):
+    """Исключение при ответе со статусом, отличным от 200."""
 
 
 def check_tokens():
@@ -51,14 +53,6 @@ def send_message(bot, message):
         logger.debug('Сообщение отправлено успешно!')
     except telegram.error.TelegramError as error:
         logger.error(f'Возникла ошибка при отправке сообщения: {error}')
-    else:
-        logger.info(f'Произведена отправка сообщения: "{message}"')
-
-
-class HTTPResponseError(Exception):
-    """Исключение при ответе со статусом, отличным от 200."""
-
-    pass
 
 
 def get_api_answer(timestamp):
@@ -69,18 +63,17 @@ def get_api_answer(timestamp):
         homework_statuses = requests.get(
             ENDPOINT, headers=HEADERS, params=payload
         )
-    except Exception as error:
-        message = f'Сбой при доступе к эндпоинту {ENDPOINT}: {error}'
-        logger.error(message)
+    except requests.exceptions.RequestException as error:
+        logger.error(f'Сбой при доступе к эндпоинту {ENDPOINT}: {error}')
     if homework_statuses.status_code != HTTPStatus.OK:
-        message = (f'Сбой при доступе к эндпоинту {ENDPOINT}.'
-                   f'Статус ответа: {homework_statuses.status_code}.')
-        raise HTTPResponseError(message)
+        raise HTTPResponseError(
+            f'Сбой при доступе к эндпоинту {ENDPOINT}.'
+            f'Статус ответа: {homework_statuses.status_code}.'
+        )
     try:
         homework_statuses = homework_statuses.json()
     except json.JSONDecodeError:
-        message = 'Сбой при попытке приведения ответа к типам данных Python'
-        logger.error(message)
+        logger.error('Сбой при приведениb ответа к типам данных Python')
     return homework_statuses
 
 
@@ -89,9 +82,8 @@ def check_response(response):
     try:
         homework_statuses = response['homeworks']
     except KeyError as error:
-        message = f'Сбой при проверке ключей в ответе API ({error})'
-        logger.error(message)
-    if type(homework_statuses) != list:
+        logger.error(f'Сбой при проверке ключей в ответе API ({error})')
+    if not isinstance(homework_statuses, list):
         raise TypeError('Ответ API - не в виде списка')
     return homework_statuses
 
@@ -102,14 +94,14 @@ def parse_status(homework):
         homework_name = homework['homework_name']
         homework_status = homework['status']
     except KeyError as error:
-        message = f'Сбой при проверке ключей в ответе API ({error})'
-        raise KeyError(message)
+        raise KeyError(f'Сбой при проверке ключей в ответе API ({error})')
     try:
         verdict = HOMEWORK_VERDICTS[homework_status]
     except KeyError as error:
-        message = (f'Несоотвутствие статуса домашней работы '
-                   f'ответа API: {error}')
-        raise KeyError(message)
+        raise KeyError(
+            f'Несоотвутствие статуса домашней работы '
+            f'ответа API: {error}'
+        )
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
@@ -131,14 +123,12 @@ def main():
             homeworks = check_response(response)
             if homeworks:
                 for homework in homeworks:
-                    message = parse_status(homework)
-                    send_message(bot, message)
+                    send_message(bot, parse_status(homework))
             else:
                 logger.debug('Программа сработала штатно.')
-            time.sleep(RETRY_PERIOD)
         except Exception as error:
-            message = f'Сбой в работе программы: {error}'
-            logger.error(message)
+            logger.error(f'Сбой в работе программы: {error}')
+        finally:
             time.sleep(RETRY_PERIOD)
 
 
